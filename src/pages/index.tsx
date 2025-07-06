@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,21 +6,35 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { Bot, Twitter, Globe, Sparkles, CheckCircle, Clock, AlertCircle, Upload, Image, Trash2, Plus } from "lucide-react";
+import { Bot, XIcon, Globe, Sparkles, CheckCircle, Clock, AlertCircle, Upload, Image, Trash2, Plus } from "lucide-react";
 
 const Index = () => {
   const [blogUrl, setBlogUrl] = useState("");
+  const [additionalText, setAdditionalText] = useState("");
   const [generatedTweet, setGeneratedTweet] = useState("");
+  const [threadTweets, setThreadTweets] = useState<string[]>([]);
+  const [isThread, setIsThread] = useState(false);
   const [threadImages, setThreadImages] = useState<{ [key: number]: { file: File; previewUrl: string } }>({});
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [currentStep, setCurrentStep] = useState<"input" | "preview" | "posted">("input");
+  const [twitterUser, setTwitterUser] = useState<string | null>(null);
+  const [currentSource, setCurrentSource] = useState<'techcrunch' | 'theverge' | 'wired' | 'hackernews' | 'devto' | 'medium'>('techcrunch');
+  const [articles, setArticles] = useState<any[]>([]);
+  const [loadingArticles, setLoadingArticles] = useState(false);
   const { toast } = useToast();
 
   const TWEET_LIMIT = 280;
+  const REASONABLE_EXTENDED_LIMIT = 500; // Allow up to 500 characters for valuable content
 
   // Split text into thread tweets
   const createThread = (text: string): string[] => {
+    // If the tweet is within reasonable extended limit and provides value, keep it as a single tweet
+    if (text.length <= REASONABLE_EXTENDED_LIMIT) {
+      return [text];
+    }
+    
+    // Only create threads for very long content
     if (text.length <= TWEET_LIMIT) return [text];
     
     const sentences = text.split(/[.!?]\s+/);
@@ -51,8 +65,74 @@ const Index = () => {
     return threads;
   };
 
-  const threadTweets = createThread(generatedTweet);
-  const isThread = threadTweets.length > 1;
+  // Update threadTweets when generatedTweet changes or on generation
+  useEffect(() => {
+    if (generatedTweet) {
+      setThreadTweets(createThread(generatedTweet));
+    } else {
+      setThreadTweets([]);
+    }
+    // eslint-disable-next-line
+  }, [generatedTweet]);
+
+  // Check Twitter authentication status and handle redirect
+  useEffect(() => {
+    // Check if we have a Twitter user in URL params (after OAuth redirect)
+    const urlParams = new URLSearchParams(window.location.search);
+    const twitterUserParam = urlParams.get('twitter_user');
+    
+    if (twitterUserParam) {
+      setTwitterUser(twitterUserParam);
+      toast({
+        title: "Twitter Connected!",
+        description: `Successfully connected to @${twitterUserParam}`,
+      });
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    
+    // Check current authentication status
+    const checkAuthStatus = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}api/twitter/user`, {
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const userData = await response.json();
+          setTwitterUser(userData.data?.username || 'Connected');
+        }
+      } catch (error) {
+        // User not authenticated, that's fine
+      }
+    };
+    
+    checkAuthStatus();
+  }, [toast]);
+
+  // Fetch articles when source changes
+  useEffect(() => {
+    const fetchArticles = async () => {
+      setLoadingArticles(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}api/tech-articles?source=${currentSource}`);
+        if (response.ok) {
+          const data = await response.json();
+          setArticles(data.articles || []);
+        } else {
+          console.error('Failed to fetch articles');
+          setArticles([]);
+        }
+      } catch (error) {
+        console.error('Error fetching articles:', error);
+        setArticles([]);
+      } finally {
+        setLoadingArticles(false);
+      }
+    };
+
+    fetchArticles();
+  }, [currentSource]);
+
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>, tweetIndex: number) => {
     const file = event.target.files?.[0];
@@ -108,58 +188,122 @@ const Index = () => {
     }
 
     setIsGenerating(true);
-    
-    // Simulate AI processing
-    setTimeout(() => {
-      const sampleTweet = `🐍 Just discovered an amazing Python optimization technique that can boost your code performance by 40%! 
 
-Using list comprehensions with conditional logic is a game-changer for data processing tasks. Here's what I learned from this comprehensive guide:
-
-✅ Memory efficiency improved significantly
-✅ Code readability enhanced
-✅ Processing speed increased dramatically
-
-The key is understanding when to use list comprehensions vs traditional loops. The performance gains are particularly noticeable when working with large datasets.
-
-Perfect timing as I'm working on optimizing our data pipeline at work. These techniques will definitely come in handy!
-
-#Python #CodeOptimization #DataScience #Programming #TechTips
-
-Read the full article: ${blogUrl}`;
+    try {
+      const params = new URLSearchParams({
+        url: blogUrl,
+        ...(additionalText.trim() && { additional_text: additionalText.trim() })
+      });
       
-      setGeneratedTweet(sampleTweet);
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}api/url-analysis?${params}`
+      );
+      if (!response.ok) {
+        throw new Error("Failed to generate tweet from API");
+      }
+      const data = await response.json();
+      
+      setGeneratedTweet(data.tweet || "");
+      
+      // Handle thread data from backend
+      if (data.thread_tweets && data.thread_tweets.length > 0) {
+        setThreadTweets(data.thread_tweets);
+        setIsThread(data.is_thread || data.thread_tweets.length > 1);
+      } else {
+        // Fallback to frontend thread creation
+        const frontendThreads = createThread(data.tweet || "");
+        setThreadTweets(frontendThreads);
+        setIsThread(frontendThreads.length > 1);
+      }
+      
       setCurrentStep("preview");
-      setIsGenerating(false);
       
+      const threadCount = data.thread_tweets ? data.thread_tweets.length : createThread(data.tweet || "").length;
       toast({
         title: "Tweet Generated!",
-        description: isThread ? "Your Python thread is ready for review" : "Your Python tweet is ready for review",
+        description: threadCount > 1 
+          ? `Your thread with ${threadCount} tweets is ready for review` 
+          : data.tweet.length > TWEET_LIMIT 
+            ? "Your extended tweet is ready for review" 
+            : "Your tweet is ready for review",
       });
-    }, 2000);
+    } 
+    catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate tweet. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handlePostTweet = async () => {
     setIsPosting(true);
-    
-    // Simulate posting to Twitter with different images for each tweet
-    setTimeout(() => {
-      setCurrentStep("posted");
-      setIsPosting(false);
+    try {
+      const formData = new FormData();
+      threadTweets.forEach((tweet, i) => {
+        formData.append('tweets', tweet);
+        if (threadImages[i]) {
+          formData.append(`image_${i}`, threadImages[i].file);
+        }
+      });
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}api/twitter/post`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      
+      if (response.status === 401) {
+        // User not authenticated, redirect to Twitter login
+        const errorData = await response.json();
+        toast({
+          title: "Authentication Required",
+          description: "Please connect your Twitter account to post tweets",
+          variant: "destructive",
+        });
+        
+        // Redirect to Twitter login
+        window.location.href = errorData.auth_url;
+        return;
+      }
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to post to Twitter');
+      }
+      
+      const result = await response.json();
+      setCurrentStep('posted');
       
       const imagesCount = Object.keys(threadImages).length;
       const imageMessage = imagesCount > 0 ? ` with ${imagesCount} different images attached` : "";
       
       toast({
         title: isThread ? "Thread Posted Successfully!" : "Tweet Posted Successfully!",
-        description: isThread 
-          ? `Your Python thread with ${threadTweets.length} tweets is now live on Twitter${imageMessage}`
-          : `Your Python content is now live on Twitter${imageMessage}`,
+        description: result.simulated 
+          ? "Tweet simulation successful! (Upgrade to Elevated access for real posting)"
+          : isThread 
+            ? `Your thread with ${threadTweets.length} tweets is now live on Twitter${imageMessage}`
+            : `Your tweet is now live on Twitter${imageMessage}`,
       });
-    }, 1500);
+    } catch (error) {
+      console.error('Error posting to Twitter:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to post to Twitter. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsPosting(false);
+    }
   };
 
   const handleStartOver = () => {
     setBlogUrl("");
+    setAdditionalText("");
     setGeneratedTweet("");
     // Clean up all image URLs
     Object.values(threadImages).forEach(image => {
@@ -182,8 +326,8 @@ Read the full article: ${blogUrl}`;
                 <Bot className="h-6 w-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-white">PythonTweetAI</h1>
-                <p className="text-sm text-blue-200">Automated Python Content Generation</p>
+                <h1 className="text-xl font-bold text-white">TweetAI</h1>
+                <p className="text-sm text-blue-200">Automated Content Generation</p>
               </div>
             </div>
             <div className="flex items-center space-x-2">
@@ -191,10 +335,51 @@ Read the full article: ${blogUrl}`;
                 <CheckCircle className="w-3 h-3 mr-1" />
                 Ready
               </Badge>
-              <Button variant="outline" size="sm" className="border-white/20 text-black hover:bg-white/10">
-                <Twitter className="w-4 h-4 mr-2" />
-                Connect Twitter
-              </Button>
+              {twitterUser ? (
+                <div className="flex items-center space-x-2">
+                  <Badge variant="secondary" className="bg-blue-500/20 text-blue-300 border-blue-500/30">
+                    <XIcon className="w-3 h-3 mr-1" />
+                    @{twitterUser}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-red-500/20 text-red-400 hover:bg-red-500/10"
+                    onClick={async () => {
+                      try {
+                        await fetch(`${import.meta.env.VITE_API_URL}api/twitter/logout`, {
+                          credentials: 'include',
+                        });
+                        setTwitterUser(null);
+                        toast({
+                          title: "Logged Out",
+                          description: "Successfully disconnected from Twitter",
+                        });
+                      } catch (error) {
+                        toast({
+                          title: "Error",
+                          description: "Failed to logout",
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-white/20 text-black hover:bg-white/10"
+                  onClick={() => {
+                    window.location.href = `${import.meta.env.VITE_API_URL}api/twitter/login`;
+                  }}
+                >
+                  <XIcon className="w-4 h-4 mr-2" />
+                  Connect Twitter
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -222,7 +407,7 @@ Read the full article: ${blogUrl}`;
               <div className="w-8 h-px bg-white/20"></div>
               <div className={`flex items-center space-x-2 ${currentStep === "posted" ? "text-green-400" : "text-gray-500"}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center ${currentStep === "posted" ? "bg-green-500" : "bg-gray-600"}`}>
-                  <Twitter className="w-4 h-4 text-white" />
+                  <XIcon className="w-4 h-4 text-white" />
                 </div>
                 <span className="text-sm font-medium">Published</span>
               </div>
@@ -234,10 +419,11 @@ Read the full article: ${blogUrl}`;
                 <CardHeader>
                   <CardTitle className="text-white flex items-center">
                     <Globe className="w-5 h-5 mr-2 text-blue-400" />
-                    Generate Python Tweet from Blog
+                    Generate Tweet from Blog
                   </CardTitle>
                   <CardDescription className="text-blue-200">
-                    Enter a Python-related blog URL and let AI create an engaging tweet for your audience
+                    Enter a blog URL and optionally add specific instructions to customize your tweet generation. 
+                    The AI will create comprehensive, valuable tweets that may exceed 280 characters when the content warrants it.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -245,11 +431,25 @@ Read the full article: ${blogUrl}`;
                     <label className="text-sm font-medium text-blue-200 mb-2 block">Blog URL</label>
                     <Input
                       type="url"
-                      placeholder="https://realpython.com/python-optimization-techniques/"
+                      placeholder="https://real.com/-optimization-techniques/"
                       value={blogUrl}
                       onChange={(e) => setBlogUrl(e.target.value)}
                       className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
                     />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-blue-200 mb-2 block">
+                      Additional Instructions (Optional)
+                    </label>
+                    <Textarea
+                      placeholder="Add specific instructions for tweet generation... (e.g., 'Focus on performance tips', 'Make it more casual', 'Include code examples')"
+                      value={additionalText}
+                      onChange={(e) => setAdditionalText(e.target.value)}
+                      className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 min-h-[80px]"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Use this to customize how the AI generates your tweet. Leave empty for default behavior.
+                    </p>
                   </div>
                   <Button 
                     onClick={handleGenerateTweet}
@@ -282,8 +482,8 @@ Read the full article: ${blogUrl}`;
                   </CardTitle>
                   <CardDescription className="text-blue-200">
                     {isThread 
-                      ? `Your AI-generated Python thread with ${threadTweets.length} tweets is ready. You can attach different images to each tweet.`
-                      : "Your AI-generated Python tweet is ready. Review and approve to post to Twitter."
+                      ? `Your AI-generated thread with ${threadTweets.length} tweets is ready. You can edit each tweet and attach different images to each tweet.`
+                      : "Your AI-generated tweet is ready. Review and approve to post to Twitter."
                     }
                   </CardDescription>
                 </CardHeader>
@@ -296,10 +496,9 @@ Read the full article: ${blogUrl}`;
                           Thread ({threadTweets.length} tweets)
                         </Badge>
                         <span className="text-xs text-gray-400">
-                          Total characters: {generatedTweet.length}
+                          Total characters: {threadTweets.reduce((acc, t) => acc + t.length, 0)}
                         </span>
                       </div>
-                      
                       {threadTweets.map((tweet, index) => (
                         <div key={index} className="border border-white/20 rounded-lg p-4 bg-white/5">
                           <div className="flex items-start justify-between mb-2">
@@ -310,20 +509,27 @@ Read the full article: ${blogUrl}`;
                               {tweet.length}/{TWEET_LIMIT}
                             </span>
                           </div>
-                          <p className="text-white text-sm whitespace-pre-wrap mb-3">{tweet}</p>
-                          
+                          {/* Editable textarea for each tweet */}
+                          <Textarea
+                            value={tweet}
+                            onChange={e => {
+                              const newTweets = [...threadTweets];
+                              newTweets[index] = e.target.value;
+                              setThreadTweets(newTweets);
+                            }}
+                            className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 min-h-[80px] mb-3"
+                          />
                           {/* Image upload section for each tweet */}
                           <div className="mt-4 space-y-2">
                             <div className="flex items-center justify-between">
                               <label className="text-xs font-medium text-blue-200">
-                                Image for Tweet {index + 1}
+                                Image for Tweet {index + 1} <span className="text-gray-400">(Optional)</span>
                               </label>
                             </div>
-                            
                             {!threadImages[index] ? (
                               <div className="border border-dashed border-white/20 rounded p-3 text-center hover:border-white/40 transition-colors relative">
                                 <Upload className="w-4 h-4 text-gray-400 mx-auto mb-1" />
-                                <p className="text-xs text-gray-400">Click to add image</p>
+                                <p className="text-xs text-gray-400">Click to add image (optional)</p>
                                 <Input
                                   type="file"
                                   accept="image/*"
@@ -368,11 +574,22 @@ Read the full article: ${blogUrl}`;
                         placeholder="Your generated tweet will appear here..."
                       />
                       <div className="flex justify-between items-center mt-2">
-                        <span className="text-xs text-gray-400">
+                        <span className={`text-xs ${
+                          generatedTweet.length <= TWEET_LIMIT ? "text-gray-400" :
+                          generatedTweet.length <= REASONABLE_EXTENDED_LIMIT ? "text-yellow-400" :
+                          "text-red-400"
+                        }`}>
                           Characters: {generatedTweet.length}/{TWEET_LIMIT}
+                          {generatedTweet.length > TWEET_LIMIT && ` (${generatedTweet.length - TWEET_LIMIT} over)`}
                         </span>
-                        <Badge variant={generatedTweet.length > TWEET_LIMIT ? "destructive" : "secondary"}>
-                          {generatedTweet.length > TWEET_LIMIT ? "Will create thread" : "Single tweet"}
+                        <Badge variant={
+                          generatedTweet.length <= TWEET_LIMIT ? "secondary" :
+                          generatedTweet.length <= REASONABLE_EXTENDED_LIMIT ? "default" :
+                          "destructive"
+                        }>
+                          {generatedTweet.length <= TWEET_LIMIT ? "Single tweet" :
+                           generatedTweet.length <= REASONABLE_EXTENDED_LIMIT ? "Extended tweet (valuable content)" :
+                           "Will create thread"}
                         </Badge>
                       </div>
 
@@ -436,8 +653,11 @@ Read the full article: ${blogUrl}`;
                         </>
                       ) : (
                         <>
-                          <Twitter className="w-4 h-4 mr-2" />
-                          Post {isThread ? `Thread (${threadTweets.length} tweets)` : "Tweet"} to Twitter
+                          <XIcon className="w-4 h-4 mr-2" />
+                          {twitterUser 
+                            ? `Post ${isThread ? `Thread (${threadTweets.length} tweets)` : "Tweet"} to Twitter`
+                            : "Connect & Post to Twitter"
+                          }
                           {Object.keys(threadImages).length > 0 && (
                             <span className="ml-1 text-xs opacity-75">
                               with {Object.keys(threadImages).length} images
@@ -449,7 +669,7 @@ Read the full article: ${blogUrl}`;
                     <Button 
                       onClick={handleStartOver}
                       variant="outline"
-                      className="border-white/20 text-white hover:bg-white/10"
+                      className="border-white/20 text-black hover:bg-white/10"
                     >
                       Start Over
                     </Button>
@@ -470,7 +690,7 @@ Read the full article: ${blogUrl}`;
                       {isThread ? "Thread Posted Successfully!" : "Tweet Posted Successfully!"}
                     </h3>
                     <p className="text-blue-200">
-                      Your Python content is now live and engaging your audience on Twitter.
+                      Your content is now live and engaging your audience on Twitter.
                       {Object.keys(threadImages).length > 0 && isThread && 
                         ` Each of your ${threadTweets.length} tweets has its own unique image attached.`
                       }
@@ -490,83 +710,126 @@ Read the full article: ${blogUrl}`;
 
           {/* Sidebar */}
           <div className="space-y-6">
-            {/* Stats Card */}
-            <Card className="bg-white/5 backdrop-blur-sm border-white/10">
-              <CardHeader>
-                <CardTitle className="text-white text-lg">Today's Stats</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-blue-200">Tweets Generated</span>
-                  <Badge className="bg-blue-500/20 text-blue-300">12</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-blue-200">Tweets Posted</span>
-                  <Badge className="bg-green-500/20 text-green-300">8</Badge>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-blue-200">Approval Rate</span>
-                  <Badge className="bg-purple-500/20 text-purple-300">67%</Badge>
-                </div>
-              </CardContent>
-            </Card>
 
-            {/* Tips Card */}
+            {/* Tech News Browser */}
             <Card className="bg-white/5 backdrop-blur-sm border-white/10">
               <CardHeader>
                 <CardTitle className="text-white text-lg flex items-center">
-                  <AlertCircle className="w-5 h-5 mr-2 text-yellow-400" />
-                  Pro Tips
+                  <Globe className="w-5 h-5 mr-2 text-blue-400" />
+                  Trending Tech Browser
                 </CardTitle>
+                <CardDescription className="text-blue-200">
+                  Browse recent trending tech articles and copy URLs to generate tweets
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="text-sm text-blue-200">
-                  • Use recent Python blog posts for trending topics
+              <CardContent>
+                <div className="space-y-3 mb-4">
+                  <div className="flex space-x-2 mb-2">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('techcrunch')}
+                    >
+                      TechCrunch
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('theverge')}
+                    >
+                      The Verge
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('wired')}
+                    >
+                      Wired
+                    </Button>
+                  </div>
+                  <div className="flex space-x-2">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('hackernews')}
+                    >
+                      Hacker News
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('devto')}
+                    >
+                      Dev.to
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      className="flex-1 border-white/20 text-black hover:bg-white/10"
+                      onClick={() => setCurrentSource('medium')}
+                    >
+                      Medium
+                    </Button>
+                  </div>
                 </div>
-                <div className="text-sm text-blue-200">
-                  • Add relevant hashtags to increase reach
-                </div>
-                <div className="text-sm text-blue-200">
-                  • Include code snippets when possible
-                </div>
-                <div className="text-sm text-blue-200">
-                  • Tag the original author for better engagement
-                </div>
-                <div className="text-sm text-blue-200">
-                  • Different images for each thread tweet boost engagement
+                
+                <div className="relative">
+                  <div className="bg-white/5 border border-white/10 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+                    <div className="p-4">
+                      {loadingArticles ? (
+                        <div className="flex items-center justify-center py-8">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400"></div>
+                          <span className="ml-2 text-white text-sm">Loading articles...</span>
+                        </div>
+                      ) : articles.length > 0 ? (
+                        <div className="space-y-3">
+                          {articles.map((article, index) => (
+                            <div key={index} className="p-3 bg-white/5 rounded-lg border border-white/10 hover:bg-white/10 transition-colors cursor-pointer">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <h4 className="text-sm font-medium text-white mb-1">{article.title}</h4>
+                                  <p className="text-xs text-gray-400 mb-2">{article.description}</p>
+                                  <div className="flex items-center space-x-2">
+                                    <Badge variant="secondary" className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+                                      {article.category}
+                                    </Badge>
+                                    <span className="text-xs text-gray-400">{article.published}</span>
+                                  </div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
+                                  onClick={() => setBlogUrl(article.url)}
+                                >
+                                  Use URL
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <Globe className="w-8 h-8 mx-auto text-gray-400 mb-2" />
+                          <p className="text-sm text-gray-400">No articles found</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="absolute top-2 right-2">
+                    <Badge variant="secondary" className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+                      Live
+                    </Badge>
+                  </div>
                 </div>
               </CardContent>
             </Card>
-
-            {/* Recent Activity */}
-            <Card className="bg-white/5 backdrop-blur-sm border-white/10">
-              <CardHeader>
-                <CardTitle className="text-white text-lg">Recent Activity</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-green-400 rounded-full mt-2"></div>
-                  <div className="flex-1">
-                    <p className="text-sm text-white">Posted: Python decorators explained</p>
-                    <p className="text-xs text-gray-400">2 minutes ago</p>
-                  </div>
-                </div>
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-blue-400 rounded-full mt-2"></div>
-                  <div className="flex-1">
-                    <p className="text-sm text-white">Generated: FastAPI performance tips</p>
-                    <p className="text-xs text-gray-400">15 minutes ago</p>
-                  </div>
-                </div>
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-green-400 rounded-full mt-2"></div>
-                  <div className="flex-1">
-                    <p className="text-sm text-white">Posted: Machine learning basics</p>
-                    <p className="text-xs text-gray-400">1 hour ago</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          
           </div>
         </div>
       </div>
