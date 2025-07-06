@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import re
 import statistics
 import os
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 
@@ -343,7 +343,11 @@ def analyze_url_content(url):
     
 def create_agent():
     openai_api_key = os.getenv("OPENAI_API_KEY")
-    llm = ChatOpenAI(model="gpt-3.5-turbo", openai_api_key=openai_api_key)
+    llm = ChatOpenAI(
+        model="gpt-3.5-turbo", 
+        api_key=openai_api_key,
+        temperature=0.7
+    )
 
     # Step 1: Summarize blog content as a tweet (human, technical background)
     summarize_prompt = PromptTemplate(

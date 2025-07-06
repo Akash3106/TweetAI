@@ -45,7 +45,7 @@ def clean_html_content(html_content):
 # Add this after creating the app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],  # adjust to your frontend port
+    allow_origins=["http://localhost:8080", "https://tweet-ai-ivory.vercel.app"],  # adjust to your frontend port
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -143,7 +143,7 @@ async def twitter_login(request: Request):
         f"https://twitter.com/i/oauth2/authorize?"
         f"response_type=code&"
         f"client_id={TWITTER_CLIENT_ID}&"
-        f"redirect_uri=http://localhost:8000/api/twitter/callback&"
+        f"redirect_uri=https://fastapi-production-9cc6.up.railway.app/api/twitter/callback&"
         f"scope=tweet.read%20tweet.write%20users.read%20offline.access&"
         f"state={state}&"
         f"code_challenge_method=S256&"
@@ -153,7 +153,7 @@ async def twitter_login(request: Request):
     # Debug logging
     print(f"Starting OAuth 2.0 flow with:")
     print(f"  Client ID: {TWITTER_CLIENT_ID}")
-    print(f"  Redirect URI: http://localhost:8000/api/twitter/callback")
+    print(f"  Redirect URI: https://fastapi-production-9cc6.up.railway.app/api/twitter/callback")
     print(f"  State: {state}")
     print(f"  Code Challenge: {code_challenge}")
     print(f"  Auth URL: {auth_url}")
@@ -178,7 +178,7 @@ async def twitter_callback(request: Request, code: str, state: str):
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": "http://localhost:8000/api/twitter/callback",
+            "redirect_uri": "https://fastapi-production-9cc6.up.railway.app/api/twitter/callback",
             "client_id": TWITTER_CLIENT_ID,
             "code_verifier": code_verifier,
         }
